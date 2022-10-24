@@ -9,6 +9,7 @@ import (
 )
 
 func TestChannel(t *testing.T) {
+	t.Parallel()
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	tl := Testlogger{}
 	testchan := NewChannel[string](ctx, tl).WithReceiveChannelTimeout(time.Millisecond * 200)
@@ -64,7 +65,16 @@ func TestChannel(t *testing.T) {
 	testchan2.Subscribe(chan99)
 	testchan2.Publish("Hello")
 	assert.EqualValues(t, "Hello", <-chan99)
+	testchan2.SubscribeCallback(SetVal)
+	testchan2.Publish("I can also call funcs!")
+	time.Sleep(time.Millisecond * 50)
+	assert.EqualValues(t, "I can also call funcs!", myGlobalTestString)
+}
 
+var myGlobalTestString = ""
+
+func SetVal(val string) {
+	myGlobalTestString = val
 }
 
 type Testlogger struct {

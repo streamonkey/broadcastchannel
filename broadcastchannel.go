@@ -18,8 +18,9 @@ type Broadcastchannel[T any] struct {
 }
 
 type outputChannel[T any] struct {
-	id      uuid.UUID
-	channel chan T
+	id       uuid.UUID
+	channel  chan T
+	callFunc func(T)
 }
 
 // NewChannel creates a new broadcast channel, given ctx as Context for cancellation.
@@ -72,6 +73,22 @@ func (ch *Broadcastchannel[T]) Subscribe(subscriber chan T) (uuid.UUID, error) {
 	return uid, nil
 }
 
+// SubscribeCallback subscribes a channel and executes given func fun(T) on message reception.
+func (ch *Broadcastchannel[T]) SubscribeCallback(fun func(T)) (uuid.UUID, error) {
+	err := ch.context.Err()
+	if err != nil {
+		return uuid.Nil, err
+	}
+	ch.outputLock.Lock()
+	uid := uuid.New()
+	ch.output = append(ch.output, &outputChannel[T]{id: uid, callFunc: fun})
+	if ch.logger != nil {
+		ch.logger.Debugf("New channel func subscriber: %s", uid)
+	}
+	ch.outputLock.Unlock()
+	return uid, nil
+}
+
 // Unsubscribe unsubscribes a channel from the broadcast channel. It will not receive further broadcasts. It will not close the channel.
 func (ch *Broadcastchannel[T]) Unsubscribe(subscriptionId uuid.UUID) {
 	if ch.logger != nil {
@@ -91,21 +108,22 @@ func (ch *Broadcastchannel[T]) Unsubscribe(subscriptionId uuid.UUID) {
 func (ch *Broadcastchannel[T]) broadcast() {
 	for {
 		select {
-		case val := <-ch.input:
-			ch.outputLock.RLock()
-			for _, outputChan := range ch.output {
-				go ch.send(outputChan, val)
+		case val, ok := <-ch.input:
+			if ok {
+				ch.outputLock.RLock()
+				for _, outputChan := range ch.output {
+					if outputChan.channel != nil {
+						go ch.send(outputChan, val)
+					} else if outputChan.callFunc != nil {
+						go outputChan.callFunc(val)
+					}
+				}
+				ch.outputLock.RUnlock()
 			}
-			ch.outputLock.RUnlock()
 		case <-ch.context.Done():
 			if ch.logger != nil {
 				ch.logger.Debugf("Main context: %s", ch.context.Err())
 			}
-			ch.outputLock.Lock()
-			for _, outputChan := range ch.output {
-				close(outputChan.channel)
-			}
-			ch.outputLock.Unlock()
 			return
 		}
 	}
